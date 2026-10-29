@@ -12,10 +12,17 @@ Requires Node.js 24.7 or newer (it uses the built-in `node:sqlite` and argon2). 
 2. Initialise the database, then start the app:
 
 ```bash
-npm run setup      # creates the database, configuration defaults and the first admin
-npm start          # http://localhost:3000 (also runs setup automatically)
-npm test           # API tests (in-memory database)
-npm run reset      # stop the server first; DELETES the database for a clean install
+# Creates the database, configuration defaults and the first admin
+npm run setup
+
+# Start the web server at http://localhost:3000
+npm start
+
+# Run API tests
+npm test
+
+# Reset/delete database for a clean install (stop server first)
+npm run reset
 ```
 
 Setup is safe to re-run:
