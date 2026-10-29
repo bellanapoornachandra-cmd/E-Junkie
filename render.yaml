@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: e-junkie
+    runtime: docker
+    plan: starter
+    disk:
+      name: ejunkie-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: EJ_DB
+        value: /data/ejunkie.db
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+

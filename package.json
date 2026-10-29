@@ -1,0 +1,16 @@
+{
+  "name": "e-junkie",
+  "version": "0.2.0",
+  "description": "Doorstep e-waste pickup booking and operations app (Visakhapatnam launch)",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=24.7"
+  },
+  "scripts": {
+    "setup": "node --no-warnings=ExperimentalWarning --env-file-if-exists=.env server/setup.js",
+    "start": "node --no-warnings=ExperimentalWarning --env-file-if-exists=.env server/server.js",
+    "reset": "node --no-warnings=ExperimentalWarning server/reset.js",
+    "test": "node --no-warnings=ExperimentalWarning --test test/api.test.js"
+  }
+}

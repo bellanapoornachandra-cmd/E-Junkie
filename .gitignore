@@ -1,0 +1,11 @@
+.env
+data/
+node_modules/
+
+# macOS
+.DS_Store
+
+# Environment secrets
+.env
+.env.*
+!.env.example

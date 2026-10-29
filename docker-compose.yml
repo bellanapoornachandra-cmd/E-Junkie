@@ -1,0 +1,19 @@
+services:
+  ejunkie:
+    build: .
+    container_name: ejunkie-app
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - PORT=3000
+      - EJ_DB=/data/ejunkie.db
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@example.com}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-ChangeMe123!}
+    volumes:
+      - ejunkie_data:/data
+
+volumes:
+  ejunkie_data:
+    driver: local
+
