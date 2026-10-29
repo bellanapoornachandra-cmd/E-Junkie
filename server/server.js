@@ -96,4 +96,14 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Port ${PORT} is already in use by another process.`);
+    console.error(`To free port ${PORT}, run: kill -9 $(lsof -t -i :${PORT})`);
+    console.error(`Or specify a different port: PORT=3001 npm start`);
+    process.exit(1);
+  }
+  throw err;
+});
+
 server.listen(PORT, () => console.log(`E-Junkie running at http://localhost:${PORT}`));
