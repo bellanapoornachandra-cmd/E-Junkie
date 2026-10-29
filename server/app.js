@@ -2,6 +2,7 @@
 import { randomBytes, createHash } from 'node:crypto';
 import { hashPassword, verifyPassword, MIN_PASSWORD_LENGTH } from './db.js';
 import { SETTINGS, todayIST, addDays, slotStart, nowISO, round2, valuate, describeRule, normalisePhone } from './util.js';
+import { persistBookingToNeon, persistBookingUpdateToNeon, persistRowToNeon } from './neon-storage.js';
 
 export class HttpError extends Error {
   constructor(status, message, code) {
@@ -314,14 +315,18 @@ export function createApi(db) {
     return { $cookie: cookie, user: publicUser(u) };
   });
 
-  route('POST', '/api/auth/signup', null, ({ body }) => {
+  route('POST', '/api/auth/signup', null, async ({ body }) => {
     const name = str(body.name, 'Name', { required: true, max: 80 });
     const email = str(body.email, 'Email', { required: true, max: 120 });
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail(400, 'Please enter a valid email address.');
     const ph = phone(body.phone);
     if (String(body.password || '').length < MIN_PASSWORD_LENGTH) fail(400, `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
     if (get('SELECT 1 FROM users WHERE email = ?', email)) fail(409, 'An account with this email already exists. Please log in.');
-    const id = insert('users', { name, email, phone: ph, role: 'customer', active: 1, password_hash: hashPassword(body.password), created_at: nowISO() });
+    const userData = { name, email, phone: ph, role: 'customer', active: 1, password_hash: hashPassword(body.password), created_at: nowISO() };
+    const id = insert('users', userData);
+    try {
+      await persistRowToNeon('users', { id, ...userData });
+    } catch {}
     const { cookie } = startSession(id);
     return { $cookie: cookie, user: publicUser(get('SELECT * FROM users WHERE id = ?', id)) };
   });
@@ -374,8 +379,12 @@ export function createApi(db) {
   }
 
   route('GET', '/api/addresses', ['customer'], ({ user }) => all('SELECT * FROM addresses WHERE customer_id = ? AND archived = 0 ORDER BY id', user.id));
-  route('POST', '/api/addresses', ['customer'], ({ user, body }) => {
-    const id = insert('addresses', { ...readAddress(body), customer_id: user.id, created_at: nowISO() });
+  route('POST', '/api/addresses', ['customer'], async ({ user, body }) => {
+    const addr = { ...readAddress(body), customer_id: user.id, created_at: nowISO() };
+    const id = insert('addresses', addr);
+    try {
+      await persistRowToNeon('addresses', { id, ...addr });
+    } catch {}
     return get('SELECT * FROM addresses WHERE id = ?', id);
   });
   route('PUT', '/api/addresses/:id', ['customer'], ({ user, params, body }) => {
@@ -430,7 +439,7 @@ export function createApi(db) {
     return out;
   });
 
-  route('POST', '/api/bookings', ['customer'], ({ user, body }) => {
+  route('POST', '/api/bookings', ['customer'], async ({ user, body }) => {
     const s = settings();
     // Items
     if (!Array.isArray(body.items) || body.items.length === 0) fail(400, 'Please choose at least one item category.');
@@ -448,7 +457,8 @@ export function createApi(db) {
       address = get('SELECT * FROM addresses WHERE id = ? AND customer_id = ? AND archived = 0', body.address_id, user.id) || fail(400, 'Please choose one of your saved addresses.');
     } else {
       const a = readAddress(body.address || {});
-      address = get('SELECT * FROM addresses WHERE id = ?', insert('addresses', { ...a, customer_id: user.id, created_at: nowISO() }));
+      const aid = insert('addresses', { ...a, customer_id: user.id, created_at: nowISO() });
+      address = get('SELECT * FROM addresses WHERE id = ?', aid);
     }
     const area = areaForPin(address.pincode) || fail(400, 'We do not collect in this PIN code yet.');
     const contact_name = str(body.contact_name, 'Contact name', { required: true, max: 80 });
@@ -457,21 +467,36 @@ export function createApi(db) {
     if (!body.data_wipe_ack) fail(400, 'Please confirm you will back up and erase personal data from your devices.');
     if (Number(body.accepted_fee) !== s.pickup_fee_rupees) fail(409, `The pickup fee has changed to ₹${s.pickup_fee_rupees}. Please review and confirm again.`);
 
-    return tx(() => {
+    const res = tx(() => {
       const slot = assertSlotBookable(Number(body.slot_id), area.id);
       takeSlot(slot.id);
       const code = newBookingCode();
-      const id = insert('bookings', {
+      const bookingData = {
         booking_code: code, customer_id: user.id, address_id: address.id,
         address_text: [address.unit, address.address_line, address.area, `${address.city} ${address.pincode}`].filter(Boolean).join(', '),
         access_instructions: address.access_instructions, area_id: area.id, slot_id: slot.id, requested_date: slot.date,
         time_window: `${slot.start_time}-${slot.end_time}`, contact_name, contact_phone, customer_notes, status: 'Booked',
         fee_rupees: s.pickup_fee_rupees, data_wipe_ack: 1, cancellation_cutoff: cutoffFor(slot), created_at: nowISO(),
-      });
+      };
+      const id = insert('bookings', bookingData);
       for (const it of items) insert('booking_items', { booking_id: id, ...it });
       addHistory(id, 'Booked', user);
-      return { booking_code: code };
+      return { id, code, bookingData, slotId: slot.id, address };
     });
+
+    try {
+      await persistBookingToNeon({
+        booking: { id: res.id, ...res.bookingData },
+        items,
+        slotId: res.slotId,
+        history: { booking_id: res.id, status: 'Booked', at: nowISO(), by_user_id: user.id },
+        address: res.address,
+      });
+    } catch (e) {
+      console.warn('NeonTech persistence notice:', e.message);
+    }
+
+    return { booking_code: res.code, message: 'Pickup booked successfully.' };
   });
 
   route('GET', '/api/bookings/:ref/slots', ['customer', 'admin'], ({ user, params }) => {
@@ -479,7 +504,7 @@ export function createApi(db) {
     return { area: b.area_name, slots: availableSlots(b.area_id).filter((s) => s.id !== b.slot_id) };
   });
 
-  route('POST', '/api/bookings/:ref/cancel', ['customer', 'admin'], ({ user, params, body }) => {
+  route('POST', '/api/bookings/:ref/cancel', ['customer', 'admin'], async ({ user, params, body }) => {
     const b = loadBooking(user, params.ref);
     if (!canModify(b, user)) fail(409, user.role === 'customer' ? 'This pickup can no longer be cancelled online. Please contact support.' : 'This booking is already closed.');
     const note = str(body.reason, 'Reason', { max: 300 });
@@ -489,30 +514,54 @@ export function createApi(db) {
       addHistory(b.id, 'Cancelled', user, note || (user.role === 'customer' ? 'Cancelled by customer' : 'Cancelled by admin'));
       if (user.role === 'admin') audit('booking', b.id, 'cancel', user, { booking: b.booking_code, note });
     });
-    return { ok: true };
+    try {
+      await persistBookingUpdateToNeon({
+        bookingCode: b.booking_code,
+        status: 'Cancelled',
+        releaseSlotId: b.slot_id,
+        note: note || (user.role === 'customer' ? 'Cancelled by customer' : 'Cancelled by admin'),
+        userId: user.id,
+      });
+    } catch (e) {
+      console.warn('NeonTech persistence notice:', e.message);
+    }
+    return { ok: true, message: 'Booking cancelled successfully.' };
   });
 
-  route('POST', '/api/bookings/:ref/reschedule', ['customer', 'admin'], ({ user, params, body }) => {
+  route('POST', '/api/bookings/:ref/reschedule', ['customer', 'admin'], async ({ user, params, body }) => {
     const b = loadBooking(user, params.ref);
     if (!canModify(b, user)) fail(409, user.role === 'customer' ? 'This pickup can no longer be rescheduled online. Please contact support.' : 'This booking is already closed.');
     if (Number(body.slot_id) === b.slot_id) fail(400, 'Please choose a different slot.');
+    let newSlot;
     tx(() => {
-      const slot = assertSlotBookable(Number(body.slot_id), b.area_id);
+      newSlot = assertSlotBookable(Number(body.slot_id), b.area_id);
       releaseSlot(b.slot_id);
-      takeSlot(slot.id);
+      takeSlot(newSlot.id);
       // A new date means the collector's route changes, so the booking goes back to the assignment queue.
       run(
         "UPDATE bookings SET slot_id = ?, requested_date = ?, time_window = ?, cancellation_cutoff = ?, status = 'Booked', collector_id = NULL, route_order = NULL WHERE id = ?",
-        slot.id, slot.date, `${slot.start_time}-${slot.end_time}`, cutoffFor(slot), b.id,
+        newSlot.id, newSlot.date, `${newSlot.start_time}-${newSlot.end_time}`, cutoffFor(newSlot), b.id,
       );
-      const note = `Rescheduled from ${b.requested_date} ${b.time_window} to ${slot.date} ${slot.start_time}-${slot.end_time}`;
+      const note = `Rescheduled from ${b.requested_date} ${b.time_window} to ${newSlot.date} ${newSlot.start_time}-${newSlot.end_time}`;
       addHistory(b.id, 'Booked', user, note);
       if (user.role === 'admin') audit('booking', b.id, 'reschedule', user, { booking: b.booking_code, note });
     });
-    return { ok: true };
+    try {
+      await persistBookingUpdateToNeon({
+        bookingCode: b.booking_code,
+        status: 'Booked',
+        slotId: newSlot.id,
+        releaseSlotId: b.slot_id,
+        note: `Rescheduled to ${newSlot.date} ${newSlot.start_time}-${newSlot.end_time}`,
+        userId: user.id,
+      });
+    } catch (e) {
+      console.warn('NeonTech persistence notice:', e.message);
+    }
+    return { ok: true, message: 'Booking rescheduled successfully.' };
   });
 
-  route('POST', '/api/bookings/:ref/assign', ['admin'], ({ user, params, body }) => {
+  route('POST', '/api/bookings/:ref/assign', ['admin'], async ({ user, params, body }) => {
     const b = loadBooking(user, params.ref);
     if (CLOSED.includes(b.status)) fail(409, 'This booking is already closed.');
     if (!body.collector_id) fail(400, 'Please choose an active collector.');
@@ -521,18 +570,29 @@ export function createApi(db) {
       fail(400, `${collector.name} does not serve the ${b.area_name || 'booking'} service area.`);
     }
     const route_order = int(body.route_order, 'Route order', { min: 1, max: 99, required: false });
+    let historyNote = '';
     tx(() => {
       const changedCollector = b.collector_id !== collector.id;
       const prevCollectorName = b.collector_name;
       const status = 'Collector assigned';
       run('UPDATE bookings SET collector_id = ?, route_order = ?, status = ? WHERE id = ?', collector.id, route_order, status, b.id);
-      const historyNote = changedCollector && prevCollectorName
+      historyNote = changedCollector && prevCollectorName
         ? `Reassigned from ${prevCollectorName} to ${collector.name}`
         : `Assigned to ${collector.name}`;
       addHistory(b.id, 'Collector assigned', user, historyNote);
       audit('booking', b.id, 'assign', user, { booking: b.booking_code, collector: collector.name, route_order });
     });
-    return { ok: true, status: 'Collector assigned', collector: { id: collector.id, name: collector.name }, route_order };
+    try {
+      await persistBookingUpdateToNeon({
+        bookingCode: b.booking_code,
+        status: 'Collector assigned',
+        note: historyNote,
+        userId: user.id,
+      });
+    } catch (e) {
+      console.warn('NeonTech persistence notice:', e.message);
+    }
+    return { ok: true, status: 'Collector assigned', collector: { id: collector.id, name: collector.name }, route_order, message: 'Collector assigned successfully.' };
   });
 
   const COLLECTOR_TRANSITIONS = {
@@ -540,7 +600,7 @@ export function createApi(db) {
     Arrived: ['Collector assigned', 'On the way'],
     'Unable to collect': COLLECTABLE,
   };
-  route('POST', '/api/bookings/:ref/status', ['collector', 'admin'], ({ user, params, body }) => {
+  route('POST', '/api/bookings/:ref/status', ['collector', 'admin'], async ({ user, params, body }) => {
     const b = loadBooking(user, params.ref);
     const next = body.status;
     if (!COLLECTOR_TRANSITIONS[next]) fail(400, 'Unknown status.');
@@ -550,11 +610,21 @@ export function createApi(db) {
       run('UPDATE bookings SET status = ?, exception_note = COALESCE(?, exception_note) WHERE id = ?', next, next === 'Unable to collect' ? note : null, b.id);
       addHistory(b.id, next, user, note);
     });
-    return { ok: true };
+    try {
+      await persistBookingUpdateToNeon({
+        bookingCode: b.booking_code,
+        status: next,
+        note,
+        userId: user.id,
+      });
+    } catch (e) {
+      console.warn('NeonTech persistence notice:', e.message);
+    }
+    return { ok: true, message: `Status updated to ${next}.` };
   });
 
   // Recording the collection is the only way into "Collected", and it creates the pending Eco Wallet entries.
-  route('POST', '/api/bookings/:ref/collect', ['collector', 'admin'], ({ user, params, body }) => {
+  route('POST', '/api/bookings/:ref/collect', ['collector', 'admin'], async ({ user, params, body }) => {
     const b = loadBooking(user, params.ref);
     const allowed = user.role === 'admin' ? [...COLLECTABLE, 'Booked', 'Unable to collect'] : COLLECTABLE;
     if (!allowed.includes(b.status)) fail(409, `A pickup that is “${b.status}” cannot be marked collected.`);
@@ -591,7 +661,16 @@ export function createApi(db) {
       }
       audit('booking', b.id, 'record_collection', user, { booking: b.booking_code, items: rows, exception });
     });
-    return { ok: true };
+    try {
+      await persistBookingUpdateToNeon({
+        bookingCode: b.booking_code,
+        status: 'Collected',
+        userId: user.id,
+      });
+    } catch (e) {
+      console.warn('NeonTech persistence notice:', e.message);
+    }
+    return { ok: true, message: 'Pickup recorded as collected successfully.' };
   });
 
   // Eco Wallet (customer) --------------------------------------------------

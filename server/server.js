@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb, DB_PATH, SetupError } from './db.js';
 import { createApi, HttpError } from './app.js';
+import { initNeonStorage, syncFromNeon } from './neon-storage.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const PORT = Number(process.env.PORT) || 3000;
@@ -17,10 +18,21 @@ const SECURITY_HEADERS = {
   'Content-Security-Policy': "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'",
 };
 
-function openOrExit() {
+async function openOrExit() {
   try {
     // ADMIN_EMAIL / ADMIN_PASSWORD come from .env and are only used to create the first admin.
-    return openDb(DB_PATH, { admin: { email: process.env.ADMIN_EMAIL, password: process.env.ADMIN_PASSWORD } });
+    const db = openDb(DB_PATH, { admin: { email: process.env.ADMIN_EMAIL, password: process.env.ADMIN_PASSWORD } });
+    if (process.env.DATABASE_URL || process.env.DATABASE_URL_POOLED) {
+      console.log('Connecting to NeonTech cloud database as source of truth...');
+      const neonRes = await initNeonStorage();
+      if (neonRes.ok) {
+        await syncFromNeon(db);
+        console.log('✓ NeonTech persistent storage ready and synchronized.');
+      } else {
+        console.warn('NeonTech sync skipped:', neonRes.error);
+      }
+    }
+    return db;
   } catch (e) {
     if (!(e instanceof SetupError)) throw e;
     console.error(`Setup error: ${e.message}`);
@@ -28,7 +40,8 @@ function openOrExit() {
   }
 }
 
-const handle = createApi(openOrExit());
+const db = await openOrExit();
+const handle = createApi(db);
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
