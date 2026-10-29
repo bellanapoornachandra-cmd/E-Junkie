@@ -650,7 +650,7 @@ export function createApi(db) {
     const areaId = query.area_id ? Number(query.area_id) : null;
     const areaName = query.area_name ? String(query.area_name).trim() : null;
     const rows = all(
-      `SELECT u.id, u.name, u.email, u.phone, u.role, u.active, u.availability, u.exception_notes, u.created_at,
+      `SELECT u.id, u.name, u.email, u.phone, u.role, u.active, u.must_change_password, u.availability, u.exception_notes, u.created_at,
          (SELECT COUNT(*) FROM bookings b WHERE b.customer_id = u.id) AS bookings,
          (SELECT COUNT(*) FROM bookings b WHERE b.collector_id = u.id AND b.status NOT IN ('Cancelled','Collected','Received by recycler')) AS open_assignments,
          (SELECT COALESCE(SUM(points), 0) FROM wallet_txns w WHERE w.customer_id = u.id AND w.status = 'Approved' AND w.redemption_id IS NULL) AS available_points
@@ -683,7 +683,7 @@ export function createApi(db) {
   });
 
   route('GET', '/api/admin/users/:id', ['admin'], ({ params }) => {
-    const u = get('SELECT id, name, email, phone, role, active, availability, exception_notes, created_at FROM users WHERE id = ?', params.id) || fail(404, 'User not found.');
+    const u = get('SELECT id, name, email, phone, role, active, must_change_password, availability, exception_notes, created_at FROM users WHERE id = ?', params.id) || fail(404, 'User not found.');
     if (u.role === 'collector') {
       const assigned = all('SELECT a.id, a.name FROM collector_areas ca JOIN service_areas a ON a.id = ca.area_id WHERE ca.collector_id = ? AND a.active = 1', u.id);
       const allActiveAreas = all('SELECT id, name FROM service_areas WHERE active = 1');
@@ -704,15 +704,21 @@ export function createApi(db) {
     const name = str(body.name, 'Name', { required: true, max: 80 });
     const email = str(body.email, 'Email', { required: true, max: 120 });
     if (get('SELECT 1 FROM users WHERE email = ?', email)) fail(409, 'That email is already registered.');
-    if (String(body.password || '').length < MIN_PASSWORD_LENGTH) fail(400, `Temporary password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+    const pw = String(body.password || '');
+    if (pw.length < MIN_PASSWORD_LENGTH) fail(400, `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+    const isTemp = body.must_change_password !== undefined
+      ? Boolean(body.must_change_password)
+      : (body.temporary_password !== undefined
+          ? Boolean(body.temporary_password)
+          : (body.temporary !== undefined ? Boolean(body.temporary) : Boolean(body.is_temporary)));
     const id = insert('users', {
       name,
       email,
       phone: phone(body.phone),
       role,
       active: 1,
-      password_hash: hashPassword(body.password),
-      must_change_password: 1,
+      password_hash: hashPassword(pw),
+      must_change_password: isTemp ? 1 : 0,
       availability: body.availability ? str(body.availability, 'Availability', { max: 200 }) : null,
       exception_notes: body.exception_notes ? str(body.exception_notes, 'Exception notes', { max: 1000 }) : null,
       created_at: nowISO(),
@@ -735,7 +741,7 @@ export function createApi(db) {
         }
       }
     }
-    audit('user', id, 'create', user, { name, email, role, area_ids: body.area_ids || (body.area_id ? [body.area_id] : null) });
+    audit('user', id, 'create', user, { name, email, role, must_change_password: isTemp ? 1 : 0, area_ids: body.area_ids || (body.area_id ? [body.area_id] : null) });
     return { id };
   });
 
@@ -763,6 +769,9 @@ export function createApi(db) {
     }
     if (body.exception_notes !== undefined) {
       changes.exception_notes = str(body.exception_notes, 'Exception notes', { max: 1000 });
+    }
+    if (body.must_change_password !== undefined) {
+      changes.must_change_password = body.must_change_password ? 1 : 0;
     }
     const hasAreaChanges = target.role === 'collector' && (body.area_ids !== undefined || body.area_id !== undefined || body.area_names !== undefined || body.area_name !== undefined);
     if (!Object.keys(changes).length && !hasAreaChanges) return { ok: true };

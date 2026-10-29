@@ -1,17 +1,20 @@
+databases:
+  - name: ejunkie-postgres
+    plan: free
+    databaseName: ejunkie
+    user: ejunkie
+
 services:
   - type: web
     name: e-junkie
     runtime: docker
-    plan: starter
-    disk:
-      name: ejunkie-data
-      mountPath: /data
-      sizeGB: 1
+    plan: free
     envVars:
-      - key: EJ_DB
-        value: /data/ejunkie.db
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ejunkie-postgres
+          property: connectionString
       - key: ADMIN_EMAIL
         sync: false
       - key: ADMIN_PASSWORD
         sync: false
-

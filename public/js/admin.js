@@ -188,10 +188,13 @@ async function users(main, ctx, role) {
     ${role === 'collector' ? html`<details class="panel"><summary>Add a collector</summary><div>
       <form class="form-grid form-grid--2" id="new-user">${formFields([
         { name: 'name', label: 'Name', required: true }, { name: 'phone', label: 'Mobile number', type: 'tel', required: true },
-        { name: 'email', label: 'Email (used to log in)', type: 'email', required: true }, { name: 'password', label: 'Temporary password', type: 'text', required: true, help: 'Share it privately; at least 10 characters. They must change it at first login.' },
+        { name: 'email', label: 'Email (used to log in)', type: 'email', required: true }, { name: 'password', label: 'Password', type: 'text', required: true, help: 'Share it securely; at least 10 characters.' },
         { name: 'availability', label: 'Availability / schedule notes', help: 'e.g. Mon–Fri 9am–5pm' },
         { name: 'exception_notes', label: 'Exception notes / internal remarks' },
       ])}
+      <div class="field field--wide">
+        <label class="check"><input type="checkbox" name="temporary_password" value="1"> <span>Mark as temporary password (require change at next login)</span></label>
+      </div>
       <fieldset class="field field--wide"><legend class="label">Service areas served</legend>
         ${activeAreas.map((a) => html`<label class="check"><input type="checkbox" name="area_${a.id}" checked> <span>${a.name}</span></label>`)}
       </fieldset>
@@ -215,6 +218,7 @@ async function users(main, ctx, role) {
           render: (u) => html`
             <strong>${u.name}</strong>
             ${u.active ? html`<span class="badge badge--good" style="margin-left: 6px;">Active</span>` : html`<span class="badge badge--muted" style="margin-left: 6px;">Inactive</span>`}
+            ${u.must_change_password ? html`<span class="badge badge--warn" style="margin-left: 6px;">Temp password</span>` : ''}
             ${u.availability ? html`<div style="font-size: 0.85rem; color: var(--muted); margin-top: 2px;">🕒 ${u.availability}</div>` : ''}
             ${u.exception_notes ? html`<div style="font-size: 0.85rem; color: var(--muted); margin-top: 2px;">📝 ${u.exception_notes}</div>` : ''}`,
         },
@@ -372,7 +376,8 @@ async function users(main, ctx, role) {
   const nf = main.querySelector('#new-user');
   if (nf) onSubmit(nf, async (v) => {
     const area_ids = Object.keys(v).filter((k) => k.startsWith('area_') && v[k]).map((k) => Number(k.slice(5)));
-    await post('/admin/users', { ...v, role, area_ids });
+    const temporary_password = Boolean(v.temporary_password);
+    await post('/admin/users', { ...v, role, area_ids, temporary_password });
     toast('Collector created.');
     ctx.refresh();
   });

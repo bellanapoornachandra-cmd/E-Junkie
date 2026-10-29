@@ -51,12 +51,11 @@ async function setup() {
   async function collector() {
     n += 1;
     const email = `k${n}@test.invalid`;
-    const created = await admin.post('/api/admin/users', { role: 'collector', name: `Collector ${n}`, email, phone: `99887${String(n).padStart(5, '0')}`, password: 'temporary-pass-1' });
+    const created = await admin.post('/api/admin/users', { role: 'collector', name: `Collector ${n}`, email, phone: `99887${String(n).padStart(5, '0')}`, password: 'collector-pass-1' });
     assert.equal(created.status, 200, created.body.error);
     const c = fresh();
-    const login = await c.post('/api/auth/login', { email, password: 'temporary-pass-1' });
-    assert.equal(login.body.user.must_change_password, true);
-    assert.equal((await c.post('/api/auth/change-password', { current_password: 'temporary-pass-1', new_password: 'collector-pass-1' })).status, 200);
+    const login = await c.post('/api/auth/login', { email, password: 'collector-pass-1' });
+    assert.equal(login.body.user.must_change_password, false);
     c.userId = created.body.id;
     return c;
   }
@@ -282,12 +281,87 @@ test('past-cutoff bookings cannot be changed by the customer', async () => {
   assert.equal((await c.post(`/api/bookings/${code}/cancel`)).status, 409);
 });
 
-test('staff created by the admin must change their temporary password', async () => {
+test('collector normal logins succeed without forced password change, while temporary passwords require change once', async () => {
   const { admin, fresh } = await setup();
-  await admin.post('/api/admin/users', { role: 'collector', name: 'New Staff', email: 'staff@test.invalid', phone: '9988700099', password: 'temporary-pass-1' });
-  const k = fresh();
-  await k.post('/api/auth/login', { email: 'staff@test.invalid', password: 'temporary-pass-1' });
-  assert.equal((await k.get('/api/bookings')).body.code, 'password_change_required');
+
+  // 1. Normal collector login: created without temporary password flag
+  const normalCreated = await admin.post('/api/admin/users', {
+    role: 'collector',
+    name: 'Normal Collector',
+    email: 'normal.collector@test.invalid',
+    phone: '9988700011',
+    password: 'permanent-pass-123',
+  });
+  assert.equal(normalCreated.status, 200, normalCreated.body.error);
+
+  // First login with current password: must_change_password is false
+  const kNormal = fresh();
+  const firstLogin = await kNormal.post('/api/auth/login', {
+    email: 'normal.collector@test.invalid',
+    password: 'permanent-pass-123',
+  });
+  assert.equal(firstLogin.status, 200);
+  assert.equal(firstLogin.body.user.must_change_password, false);
+
+  // Protected collector routes are immediately accessible (not gated)
+  const normalBookingsRes = await kNormal.get('/api/bookings');
+  assert.equal(normalBookingsRes.status, 200);
+
+  // Subsequent login with current password: still false and accessible
+  const kNormal2 = fresh();
+  const secondLogin = await kNormal2.post('/api/auth/login', {
+    email: 'normal.collector@test.invalid',
+    password: 'permanent-pass-123',
+  });
+  assert.equal(secondLogin.status, 200);
+  assert.equal(secondLogin.body.user.must_change_password, false);
+  assert.equal((await kNormal2.get('/api/bookings')).status, 200);
+
+  // 2. Collector created with explicit temporary password flag
+  const tempCreated = await admin.post('/api/admin/users', {
+    role: 'collector',
+    name: 'Temp Collector',
+    email: 'temp.collector@test.invalid',
+    phone: '9988700022',
+    password: 'temp-init-pass-123',
+    temporary_password: true,
+  });
+  assert.equal(tempCreated.status, 200, tempCreated.body.error);
+
+  // First login with temporary password: must_change_password is true
+  const kTemp = fresh();
+  const tempLogin = await kTemp.post('/api/auth/login', {
+    email: 'temp.collector@test.invalid',
+    password: 'temp-init-pass-123',
+  });
+  assert.equal(tempLogin.status, 200);
+  assert.equal(tempLogin.body.user.must_change_password, true);
+
+  // Protected routes are gated
+  const gatedRes = await kTemp.get('/api/bookings');
+  assert.equal(gatedRes.status, 403);
+  assert.equal(gatedRes.body.code, 'password_change_required');
+
+  // Change password once
+  const changeRes = await kTemp.post('/api/auth/change-password', {
+    current_password: 'temp-init-pass-123',
+    new_password: 'collector-chosen-pw-456',
+  });
+  assert.equal(changeRes.status, 200, changeRes.body.error);
+  assert.equal(changeRes.body.user.must_change_password, false);
+
+  // Protected routes are now open
+  assert.equal((await kTemp.get('/api/bookings')).status, 200);
+
+  // Subsequent login with new password: must_change_password is false and routes are accessible
+  const kSubsequent = fresh();
+  const subLogin = await kSubsequent.post('/api/auth/login', {
+    email: 'temp.collector@test.invalid',
+    password: 'collector-chosen-pw-456',
+  });
+  assert.equal(subLogin.status, 200);
+  assert.equal(subLogin.body.user.must_change_password, false);
+  assert.equal((await kSubsequent.get('/api/bookings')).status, 200);
 });
 
 test('admin assigns and changes collectors with area validation, auditable history, and role restrictions', async () => {
@@ -533,10 +607,21 @@ test('admin secure collector editing, duplicate email check, unauthorized access
     new_password: 'permanent-final-pw-999',
   });
   assert.equal(changeRes.status, 200, changeRes.body.error);
+  assert.equal(changeRes.body.user.must_change_password, false);
 
   // Now protected routes are open
   const openRes = await kNewSession.get('/api/bookings');
   assert.equal(openRes.status, 200);
+
+  // Subsequent login after temporary password was changed once succeeds normally
+  const kSubsequentAfterReset = fresh();
+  const subLoginAfterReset = await kSubsequentAfterReset.post('/api/auth/login', {
+    email: 'collector.updated@test.invalid',
+    password: 'permanent-final-pw-999',
+  });
+  assert.equal(subLoginAfterReset.status, 200);
+  assert.equal(subLoginAfterReset.body.user.must_change_password, false);
+  assert.equal((await kSubsequentAfterReset.get('/api/bookings')).status, 200);
 
   // Account deactivation terminates sessions and blocks login
   await admin.put(`/api/admin/users/${k.userId}`, { active: false });

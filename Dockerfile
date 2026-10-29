@@ -6,10 +6,14 @@ WORKDIR /app
 # Ensure data directory exists for SQLite database storage
 RUN mkdir -p /data
 
-# Copy application files (no npm dependencies or build step required)
-COPY package.json ./
+# Copy package definition and install production dependencies
+COPY package.json package-lock.json* ./
+RUN npm install --omit=dev
+
+# Copy application files
 COPY server ./server
 COPY public ./public
+COPY scripts ./scripts
 
 # Production environment variables
 ENV NODE_ENV=production

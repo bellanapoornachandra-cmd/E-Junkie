@@ -5,6 +5,7 @@
 .env.*
 !.env.example
 data/*.db*
+backups
 test
 scratch
 *.md

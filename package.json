@@ -11,6 +11,12 @@
     "setup": "node --no-warnings=ExperimentalWarning --env-file-if-exists=.env server/setup.js",
     "start": "node --no-warnings=ExperimentalWarning --env-file-if-exists=.env server/server.js",
     "reset": "node --no-warnings=ExperimentalWarning server/reset.js",
-    "test": "node --no-warnings=ExperimentalWarning --test test/api.test.js"
+    "test": "node --no-warnings=ExperimentalWarning --test test/api.test.js",
+    "deploy": "./scripts/deploy.sh",
+    "backup": "./scripts/backup.sh",
+    "db:init": "node --no-warnings=ExperimentalWarning --env-file-if-exists=.env scripts/init-postgres.js"
+  },
+  "dependencies": {
+    "pg": "^8.23.1"
   }
 }
