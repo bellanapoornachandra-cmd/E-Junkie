@@ -150,7 +150,7 @@ async function bookings(main, ctx) {
     { label: 'Items', render: (b) => b.items_summary },
     { label: 'Collector', render: assignForm },
     { label: 'Status', render: (b) => badge(b.status) },
-  ], list, { emptyText: rows.length ? 'No bookings match these filters.' : 'No bookings yet. They appear here as customers book pickups.' }), (b, f) =>
+  ], list, { emptyText: rows.length ? 'No bookings match these filters. Reset filters or choose "All statuses" to see all bookings.' : 'No bookings yet. They appear here as customers book pickups.' }), (b, f) =>
     (!f.q || [b.booking_code, b.customer_name, b.contact_name, b.contact_phone, b.address_text].join(' ').toLowerCase().includes(f.q))
     && (!f.status || b.status.toLowerCase() === f.status)
     && (!f.area || areaNamesMatch(b.area_name, f.area))

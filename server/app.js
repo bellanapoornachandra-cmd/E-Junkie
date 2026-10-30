@@ -180,11 +180,11 @@ export function createApi(db) {
   }
 
   const BOOKING_SELECT = `
-    SELECT b.*, a.name AS area_name, c.name AS customer_name, c.email AS customer_email, col.name AS collector_name,
+    SELECT b.*, a.name AS area_name, COALESCE(c.name, b.contact_name) AS customer_name, c.email AS customer_email, col.name AS collector_name,
       (SELECT group_concat(ic.name || ' × ' || bi.est_qty, ', ') FROM booking_items bi JOIN item_categories ic ON ic.id = bi.category_id WHERE bi.booking_id = b.id) AS items_summary
     FROM bookings b
     LEFT JOIN service_areas a ON a.id = b.area_id
-    JOIN users c ON c.id = b.customer_id
+    LEFT JOIN users c ON c.id = b.customer_id
     LEFT JOIN users col ON col.id = b.collector_id`;
 
   function canModify(b, user) {

@@ -417,7 +417,7 @@ export async function pickups(main, { query }) {
       <a class="btn btn--sm ${tab === 'upcoming' ? '' : 'btn--ghost'}" href="#/pickups" role="tab" aria-selected="${tab === 'upcoming'}">Upcoming (${upcoming.length})</a>
       <a class="btn btn--sm ${tab === 'past' ? '' : 'btn--ghost'}" href="#/pickups?tab=past" role="tab" aria-selected="${tab === 'past'}">Past (${past.length})</a>
     </div>
-    <div class="stack">${shown.length ? shown.map(pickupCard) : empty(tab === 'past' ? 'No past pickups yet.' : 'No upcoming pickups.', html`<a class="btn" href="#/book">Book a pickup</a>`)}</div>`;
+    <div class="stack">${shown.length ? shown.map(pickupCard) : empty(tab === 'past' ? 'No past pickups yet.' : (past.length ? html`No upcoming pickups. <a href="#/pickups?tab=past">View past or completed pickups (${past.length}) &rarr;</a>` : 'No upcoming pickups.'), html`<a class="btn" href="#/book">Book a pickup</a>`)}</div>`;
 }
 
 // ======================================================================= Receipt

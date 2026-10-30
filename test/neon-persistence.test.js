@@ -53,7 +53,8 @@ test('NeonTech persistent storage: booking persists to cloud and survives app re
   const slotsRes = await c1.get('/api/slots?pin=530013');
   assert.equal(slotsRes.status, 200);
   assert.ok(slotsRes.body.slots.length > 0, 'Slots available');
-  const slot = slotsRes.body.slots[0];
+  // Pick a future slot safely outside the 12-hour cancellation cutoff window
+  const slot = slotsRes.body.slots.find((s) => s.date > '2026-11-01') || slotsRes.body.slots[slotsRes.body.slots.length - 1];
 
   const bookRes = await c1.post('/api/bookings', {
     items: [{ category_id: 1, est_qty: 2 }],
